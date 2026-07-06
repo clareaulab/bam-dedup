@@ -21,12 +21,13 @@ dependencies = ["pysam"]
 
 setup(
     name="bam-dedup",
-    version="0.1.0",
+    version="0.2.0",
     url="https://github.com/caleblareau/bam-dedup",
     license="MIT",
     author="Caleb Lareau",
     author_email="caleb.lareau@gmail.com",
-    description="Fast, JVM-free reimplementation of Picard MarkDuplicates.",
+    description="Fast, JVM-free BAM deduplication: PCR/optical (Picard-like) "
+                "and molecular/UMI consensus (fgbio-like).",
     long_description=__doc__,
     packages=find_packages(exclude=["tests"]),
     ext_modules=extensions,
@@ -40,6 +41,7 @@ setup(
     entry_points={
         "console_scripts": [
             "bam-dedup = dedup.cli:main",
+            "bam-consensus = dedup.fgbiolike:main",
         ],
     },
     classifiers=[

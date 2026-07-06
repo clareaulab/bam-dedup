@@ -1,0 +1,14 @@
+# Build / install artifacts
+build/
+.eggs/
+*.so
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+venv/
+
+# Cython-generated C is tracked intentionally (for sdist builds without Cython);
+# local editor/OS cruft is not.
+.DS_Store
