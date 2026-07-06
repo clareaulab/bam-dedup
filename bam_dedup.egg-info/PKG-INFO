@@ -1,0 +1,40 @@
+Metadata-Version: 2.4
+Name: bam-dedup
+Version: 0.1.0
+Summary: Fast, JVM-free reimplementation of Picard MarkDuplicates.
+Home-page: https://github.com/caleblareau/bam-dedup
+Author: Caleb Lareau
+Author-email: caleb.lareau@gmail.com
+License: MIT
+Platform: any
+Classifier: Development Status :: 4 - Beta
+Classifier: Environment :: Console
+Classifier: Intended Audience :: Science/Research
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: POSIX
+Classifier: Operating System :: MacOS
+Classifier: Operating System :: Unix
+Classifier: Programming Language :: Python
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Cython
+Classifier: Topic :: Scientific/Engineering :: Bio-Informatics
+Requires-Python: >=3.8
+License-File: LICENSE.txt
+Requires-Dist: pysam
+Provides-Extra: test
+Requires-Dist: pytest; extra == "test"
+Dynamic: author
+Dynamic: author-email
+Dynamic: classifier
+Dynamic: description
+Dynamic: home-page
+Dynamic: license
+Dynamic: license-file
+Dynamic: platform
+Dynamic: provides-extra
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary
+
+
+bam-dedup: a fast, JVM-free reimplementation of Picard MarkDuplicates.

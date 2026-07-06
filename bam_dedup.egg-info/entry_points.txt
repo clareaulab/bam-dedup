@@ -1,0 +1,2 @@
+[console_scripts]
+bam-dedup = dedup.cli:main

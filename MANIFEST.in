@@ -1,0 +1,21 @@
+# Ship Cython sources (and generated C, if present) so sdists build cleanly
+recursive-include dedup *.pyx *.pxd *.c
+
+# Test + benchmark code and small BAMs used by the suite
+recursive-include tests *.py *.md
+recursive-include tests/data *.bam *.bai
+
+# Misc
+include README.md
+include LICENSE.txt
+include pyproject.toml
+
+# Prune build cruft
+prune *.egg-info
+global-exclude *.so
+global-exclude *.DS_Store
+global-exclude __pycache__
+
+# Keep the 15 MB Picard jar out of the distributable (repo-only, for local
+# benchmarking). See tests/benchmark/README.md.
+global-exclude *.jar
