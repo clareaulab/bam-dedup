@@ -21,7 +21,7 @@ dependencies = ["pysam"]
 
 setup(
     name="bam-dedup",
-    version="0.2.0",
+    version="0.3.0",
     url="https://github.com/caleblareau/bam-dedup",
     license="MIT",
     author="Caleb Lareau",
