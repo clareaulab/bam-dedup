@@ -1,21 +1,32 @@
 # bam-dedup
 
-A fast, **JVM-free** reimplementation of [Picard
-MarkDuplicates](https://broadinstitute.github.io/picard/). The core
-duplicate-marking algorithm is a faithful, independent port of the
-Picard/htsjdk logic (coordinate-sorted, Illumina paired-end, default options),
-with the performance-critical inner loops accelerated in Cython. All BAM/CRAM
-I/O goes through [pysam](https://github.com/pysam-developers/pysam) (htslib) —
-no Java required.
+A fast, **JVM-free** toolkit for removing duplicate reads from BAM/CRAM. It
+handles the **two major kinds of duplication event** in sequencing data, each a
+faithful, independent port of the standard reference tool, with the
+performance-critical inner loops accelerated in Cython. All BAM/CRAM I/O goes
+through [pysam](https://github.com/pysam-developers/pysam) (htslib) — no Java
+required.
 
-On real data it is **bit-identical to Picard MarkDuplicates 2.18.21** for the
-duplicate flag *and* the optical/sequencing-duplicate classification, while
-running faster than the Java tool.
+| Duplication kind | Module | Reproduces | What it does |
+|---|---|---|---|
+| **PCR / optical duplicates** | `dedup.picardlike` | [Picard MarkDuplicates](https://broadinstitute.github.io/picard/) | flags or removes duplicate *records* by 5′ position + orientation |
+| **Molecular / UMI duplicates** | `dedup.fgbiolike` | [fgbio](https://github.com/fulcrumgenomics/fgbio) GroupReadsByUmi + CallMolecularConsensusReads | collapses reads sharing a UMI into one error-corrected *consensus* read |
 
-> The importable module is named `dedup.picardlike` — this project is an
-> independent reimplementation and is **not** affiliated with or derived from
-> the Picard source code; "Picard" is referenced only to describe the behavior
-> it reproduces.
+Both are validated against their reference tool:
+
+* `picardlike` is **bit-identical to Picard MarkDuplicates 2.18.21** for the
+  duplicate flag *and* the optical/sequencing-duplicate classification.
+* `fgbiolike` is **bit-identical to fgbio 4.1.0** (`GroupReadsByUmi -s Identity`
+  and `CallMolecularConsensusReads`) for the grouped `MI` assignment and every
+  consensus base, quality, and `cD`/`cM`/`cE`/`cd`/`ce` tag — verified
+  record-for-record on both a bundled test BAM and a 176k-read MAESTER file.
+
+Both run faster than the corresponding Java tool.
+
+> The importable modules `dedup.picardlike` / `dedup.fgbiolike` are independent
+> reimplementations, **not** affiliated with or derived from the Picard or fgbio
+> source code; those names are referenced only to describe the behavior
+> reproduced.
 
 ---
 
@@ -63,8 +74,11 @@ fallback that produces bit-identical results (just slower).
 
 ## Usage
 
-pysam-like: point at an input BAM, call one function, get an output BAM. Input
-must be **coordinate-sorted** (e.g. `samtools sort`).
+pysam-like: point at an input BAM, call one function, get an output BAM.
+
+### PCR / optical duplicates (`picardlike`)
+
+Input must be **coordinate-sorted** (e.g. `samtools sort`).
 
 ```python
 from dedup import picardlike
@@ -88,31 +102,75 @@ picardlike.deduplicate("input.sorted.bam", "dedup.bam")
 `deduplicate(...)` is a convenience wrapper equal to
 `mark_duplicates(..., remove_duplicates=True)`.
 
+### Molecular / UMI duplicates (`fgbiolike`)
+
+Reads must carry a UMI tag (default `UB`); a cell-barcode tag (default `CB`) is
+used when present. The one-shot `consensus()` runs the two fgbio steps —
+grouping reads into molecules, then collapsing each molecule into a consensus
+read:
+
+```python
+from dedup import fgbiolike
+
+# group by UMI (+ cell barcode) and emit error-corrected consensus reads
+fgbiolike.consensus("input.bam", "consensus.bam", umi_tag="UB", min_reads=3)
+```
+
+Or run the two stages explicitly:
+
+```python
+fgbiolike.group_reads_by_umi("input.bam", "grouped.bam", raw_tag="UB")
+fgbiolike.call_molecular_consensus_reads("grouped.bam", "consensus.bam",
+                                         tag="MI", min_reads=3)
+```
+
+`consensus(...)` / `call_molecular_consensus_reads(...)` options:
+
+| option | default | meaning |
+|---|---|---|
+| `min_reads` | `3` | minimum reads in a molecule to emit a consensus |
+| `umi_tag` | `"UB"` | raw UMI tag used for grouping |
+| `cell_tag` | `"CB"` | cell-barcode tag; consensus is called per cell |
+| `consensus_tag` | `"MI"` | tag grouped on in the consensus step (see note) |
+| `on_cell_collision` | `"split"` | if a molecule spans >1 cell: `split`, `merge`, or `error` |
+
+> **Grouping key.** The consensus step groups by the assigned molecular id `MI`
+> (per position × cell × UMI). This is the correct, crash-free equivalent of
+> fgbio's `-t UB`: fgbio *aborts* if a raw-UMI group ever spans two cell
+> barcodes, whereas `on_cell_collision="split"` (the default) simply calls one
+> consensus per cell.
+
 ### Command line
 
-Installing the package also provides a `bam-dedup` console command:
+Installing the package provides two console commands:
 
 ```bash
+# PCR/optical duplicate marking
 bam-dedup -i input.sorted.bam -o dedup.bam --remove-duplicates
-```
 
-```
-bam-dedup -i INPUT -o OUTPUT
-    --remove-duplicates              remove duplicates instead of flagging
-    --remove-sequencing-duplicates   remove optical/sequencing duplicates
-    --no-optical                     disable optical-duplicate detection
-    --optical-pixel-distance N       optical pixel distance (default 100)
+# UMI molecular-consensus deduplication (group + call in one step)
+bam-consensus consensus -i input.bam -o consensus.bam -M 3
+# or the individual stages:
+bam-consensus group -i input.bam -o grouped.bam -t UB
+bam-consensus call  -i grouped.bam -o consensus.bam -t MI -M 3
 ```
 
 ---
 
 ## Scope
 
-Faithful to Picard for coordinate-sorted input, the default
+**`picardlike`** — faithful to Picard for coordinate-sorted input, the default
 `SUM_OF_BASE_QUALITIES` scoring strategy, standard Illumina read names, and
-single/multiple libraries. **Not yet handled:** queryname-sorted input,
-UMI/barcode-aware marking, flow-based mode, and the non-default scoring
-strategies (`TOTAL_MAPPED_REFERENCE_LENGTH`, `RANDOM`).
+single/multiple libraries. *Not yet handled:* queryname-sorted input, flow-based
+mode, and the non-default scoring strategies (`TOTAL_MAPPED_REFERENCE_LENGTH`,
+`RANDOM`).
+
+**`fgbiolike`** — faithful to fgbio for the `Identity` grouping strategy
+(`edits=0`) and the single-end / fragment consensus path (the MAESTER-style
+input), with fgbio's default error model (pre=45, post=40),
+`min-input-base-quality=10`, and per-base tags. *Not yet handled:* the
+Adjacency/Edit/Paired strategies (`edits > 0`) and paired-end / duplex /
+overlapping-base consensus.
 
 ---
 
@@ -123,9 +181,11 @@ pip install -e ".[test]"
 pytest
 ```
 
-The suite (`tests/test_dedup.py`) validates duplicate and optical-duplicate
-counts against Picard's reference output on the bundled BAMs
-(`tests/data/`) and checks that the Cython and pure-Python paths agree.
+`tests/test_dedup.py` validates duplicate and optical-duplicate counts against
+Picard's reference output on the bundled BAMs; `tests/test_fgbiolike.py`
+validates UMI grouping and consensus reads against **fgbio golden outputs**
+(`tests/data/umi_consensus.*.golden.bam`). Both suites also check that the Cython
+and pure-Python paths agree.
 
 ## Benchmarking against Picard
 
