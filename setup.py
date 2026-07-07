@@ -1,5 +1,5 @@
 """
-bam-dedup: a fast, JVM-free reimplementation of Picard MarkDuplicates.
+bam-dedup: a fast, JVM-free reimplementation of familiar tools.
 """
 from setuptools import find_packages, setup, Extension
 
