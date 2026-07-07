@@ -27,10 +27,21 @@ SCOPE / faithful to Picard for:
     * single or multiple read groups / libraries
     * REMOVE_DUPLICATES / REMOVE_SEQUENCING_DUPLICATES
 
+barcode_tag (mark_duplicates/deduplicate keyword, --barcode-tag on the CLI) is
+an intentional *departure* from Picard, not a port of it: it groups duplicate
+candidates by (library, barcode_tag value, position, orientation [, mate]), so
+records are only flagged as duplicates of one another if they also share the
+same tag value -- e.g. a cell-barcode tag, so reads from different cells at
+the same genomic position are never collapsed. Picard's own BARCODE_TAG does
+UMI-aware marking via UmiUtil.getTopStrandNormalizedUmi, which in testing
+silently finds zero duplicates whenever the tag value is constant across a
+large group of reads (e.g. a cell barcode with no true per-molecule UMI
+attached) -- not what most callers actually want, so it isn't reproduced here.
+
 NOT (yet) handled -- these fall back to sane behavior but are not bit-identical:
     * queryname-sorted / query-grouped input (Picard marks unmapped mates &
       secondary/supplementary differently in that mode)
-    * BARCODE_TAG / UMI-aware marking, DUPLEX_UMI
+    * Picard's own BARCODE_TAG / UMI-aware marking semantics, DUPLEX_UMI
     * flow-based (FLOW_MODE) scoring
     * TOTAL_MAPPED_REFERENCE_LENGTH / RANDOM scoring strategies
     * DT / DI / DS tagging policies (easy to add; see notes)
@@ -89,6 +100,7 @@ class ReadEnds:
         "read_group", "orientation_optical",
         "tile", "x", "y",
         "is_optical_duplicate",
+        "barcode_value",
     )
 
     def __init__(self):
@@ -107,6 +119,8 @@ class ReadEnds:
         self.x = -1
         self.y = -1
         self.is_optical_duplicate = False
+        # "" when barcode_tag is not in use, so grouping is unaffected by default.
+        self.barcode_value = ""
 
     @property
     def is_paired(self):
@@ -133,12 +147,16 @@ class ReadEnds:
         c.x = self.x
         c.y = self.y
         c.is_optical_duplicate = self.is_optical_duplicate
+        c.barcode_value = self.barcode_value
         return c
 
-    # Sort key == picard ReadEndsMDComparator.compare (no barcodes).
+    # Sort key == picard ReadEndsMDComparator.compare, extended with an
+    # optional barcode_value (constant "" -- and thus a no-op -- unless
+    # barcode_tag is passed to mark_duplicates/deduplicate).
     def sort_key(self):
         return (
             self.library_id,
+            self.barcode_value,
             self.read1_ref,
             self.read1_coord,
             self.orientation,
@@ -412,7 +430,7 @@ def track_optical_duplicates(ends, keeper, dist):
 # ----------------------------------------------------------------------------
 # Phase 1: build sorted read-end lists (single pass over coordinate-sorted BAM).
 # ----------------------------------------------------------------------------
-def build_read_ends(bam, read_name_regex_enabled, optical_dist):
+def build_read_ends(bam, read_name_regex_enabled, optical_dist, barcode_tag=None):
     header = bam.header
     # library-id: map library (LB) name -> small int; RG id -> library, RG ordinal
     rg_records = header.get("RG", [])
@@ -448,6 +466,11 @@ def build_read_ends(bam, read_name_regex_enabled, optical_dist):
         if read.is_paired and not read.mate_is_unmapped:
             e.read2_ref = read.next_reference_id
         e.library_id, _ = library_id_for(read)
+        if barcode_tag is not None:
+            try:
+                e.barcode_value = read.get_tag(barcode_tag)
+            except KeyError:
+                e.barcode_value = ""
         # optical location
         if read_name_regex_enabled:
             loc = parse_location(read.query_name)
@@ -547,6 +570,8 @@ def _combine_mate(paired, frag, read, optical):
 # ----------------------------------------------------------------------------
 def _comparable(lhs, rhs, compare_read2):
     if lhs.library_id != rhs.library_id:
+        return False
+    if lhs.barcode_value != rhs.barcode_value:
         return False
     if not (lhs.read1_ref == rhs.read1_ref and
             lhs.read1_coord == rhs.read1_coord and
@@ -687,7 +712,20 @@ def mark_duplicates(input_bam, output_bam,
                     remove_sequencing_duplicates=False,
                     read_name_regex_enabled=True,
                     optical_pixel_distance=DEFAULT_OPTICAL_PIXEL_DISTANCE,
-                    metrics_file=None):
+                    metrics_file=None,
+                    barcode_tag=None):
+    """
+    barcode_tag: when set, reads/pairs are additionally grouped by the value of
+    this tag before duplicate detection, so records that would otherwise look
+    like duplicates (same library, position, orientation) are only flagged as
+    duplicates of each other if they also share the same barcode_tag value.
+    Reads missing the tag are grouped together under a single "no barcode"
+    bucket. This is a deliberate, well-defined design -- not a port of Picard's
+    BARCODE_TAG (which does UMI-aware duplicate marking via
+    UmiUtil.getTopStrandNormalizedUmi and, in testing, silently finds zero
+    duplicates when the tag value is constant across a large group of reads,
+    e.g. a single-cell barcode with no true per-molecule UMI).
+    """
     with pysam.AlignmentFile(input_bam, "rb") as bam:
         so = bam.header.get("HD", {}).get("SO", "unknown")
         if so != "coordinate":
@@ -695,7 +733,7 @@ def mark_duplicates(input_bam, output_bam,
                 "WARNING: input SO='{}'. This implementation is faithful only "
                 "for coordinate-sorted input.\n".format(so))
         frag_list, pair_list, _ = build_read_ends(
-            bam, read_name_regex_enabled, optical_pixel_distance)
+            bam, read_name_regex_enabled, optical_pixel_distance, barcode_tag)
 
     index_optical = remove_sequencing_duplicates or (metrics_file is not None)
     dup_idx, opt_idx, opt_clusters = generate_duplicate_indexes(
@@ -731,6 +769,10 @@ def main(argv=None):
     p.add_argument("--optical-pixel-distance", type=int,
                    default=DEFAULT_OPTICAL_PIXEL_DISTANCE)
     p.add_argument("--metrics-file", default=None)
+    p.add_argument("--barcode-tag", default=None,
+                   help="group duplicate candidates by this tag's value in addition to "
+                        "position/orientation (e.g. a cell barcode tag); reads sharing a "
+                        "position but carrying different tag values are never collapsed")
     args = p.parse_args(argv)
 
     mark_duplicates(
@@ -740,6 +782,7 @@ def main(argv=None):
         read_name_regex_enabled=not args.no_optical,
         optical_pixel_distance=args.optical_pixel_distance,
         metrics_file=args.metrics_file,
+        barcode_tag=args.barcode_tag,
     )
 
 
